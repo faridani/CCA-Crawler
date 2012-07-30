@@ -2,6 +2,8 @@ from scrapy.contrib.spiders import CrawlSpider, Rule
 from scrapy.selector import HtmlXPathSelector
 from scrapy.contrib.linkextractors.sgml import SgmlLinkExtractor
 from scrapy.http import Request
+import string
+import re
 
 from zappos.items import ZapposItem
 
@@ -10,7 +12,7 @@ class women_shoes_spider (CrawlSpider):
     allowed_domains = ['zappos.com']
     start_urls = ['http://www.zappos.com/womens-shoes~1i7']
     ##Stack (or queue) for keeping track of crawled sites
-    crawled = []
+    ##crawled = []
     ##Only follow URLs containing the word "womens" followed by anything (because
     ##this includes all types of women's shoes)
     rules = (
@@ -24,10 +26,11 @@ class women_shoes_spider (CrawlSpider):
 
         page_div = hxs.select('//div[@class="sort top"]//div[@class="pagination"]')
         ##current page of shoes##
-        current_page = page_div.select('./text()').extract()
+        current_page_temp = page_div.select('./text()').extract()
         ##We must check if current_page is a null list to avoid index out-of-bounds error.
-        if current_page:
-            current_page = filter(lambda x: not x == ' ', current_page)[0]
+        current_page = ""
+        if current_page_temp:
+            current_page = filter(lambda x: not x == ' ', current_page_temp)[0]
         else:
             current_page = -1
 
@@ -86,6 +89,10 @@ class women_shoes_spider (CrawlSpider):
         request.meta['id'] = shoe_id
         yield request
 
+    ##Loops through the pages of reviews for one product;
+    ##does not loop through the reviews on each page.
+    ##In other words, this loop traverses the pages, calling
+    ##the next level parse method to parse the reviews.
     def parse_reviews_lvl1 (self, response):
         hxs = HtmlXPathSelector(response)
         ##some product info##
@@ -107,7 +114,7 @@ class women_shoes_spider (CrawlSpider):
 
         ##Loop through all pages.
         num_pages_int = int(num_pages)
-        for page_num in range(1, num_pages_int):
+        for page_num in range(1, num_pages_int + 1):
             non_numbered_url = response.url[0 : response.url.find("page/") + 5]
             numbered_url = non_numbered_url + str(page_num)
             request = Request(numbered_url, callback = self.parse_reviews_lvl2)
@@ -116,13 +123,14 @@ class women_shoes_spider (CrawlSpider):
             request.meta['url'] = numbered_url
             yield request
 
+    ##Parse reviews.
     def parse_reviews_lvl2 (self, response):
         ##If url_toAdd is in the crawled list of URLs, then simply return.
         ##Otherwise, append it to crawled, and continue with parsing.
-        url_toAdd = response.url
-        if url_toAdd in self.crawled:
-            return
-        self.crawled.append(url_toAdd)
+        ##url_toAdd = response.url
+        ##if url_toAdd in self.crawled:
+            ##return
+        ##self.crawled.append(url_toAdd)
 
         hxs = HtmlXPathSelector(response)
         product_name = response.meta['name']
@@ -140,13 +148,34 @@ class women_shoes_spider (CrawlSpider):
             reviewer = content.select('.//h3/text()').extract()[0].strip()
             location = content.select('.//p[@class="reviewerLocation"]/text()').extract()[0].strip()
             
-            description = content.select('.//p[@class="reviewSummary"]//text()').extract()[0]
+            ##process descriptions
+            description_list =  content.select('.//p[@class="reviewSummary"]//text()').extract()
+            for segment in description_list:
+                current_index = description_list.index(segment)
+                ##previous_index = current_index - 1
+                ##rest = segment[1:]
+                ##first = segment[0]
+                ##if re.match('[.,!?]', first):
+                    ##description_list[current_index] = rest
+                    ##description_list[previous_index] = description_list[previous_index] + first
+                description_list[current_index] = string.replace(segment, '\n', '')
+                description_list[current_index] = string.replace(segment, '\r', '')
+                description_list[current_index] = string.replace(segment, '\r\n', '')
+                            
+            description = "".join(description_list)
+
             ##star ratings (overall, comfort, style)
             product_ratings = content.select('.//div[@class="productRatings"]//p')
-            overall = product_ratings[0].select('.//span[contains(@class, "stars rating")]/text()').extract()[0]
-            comfort = product_ratings[1].select('.//span[contains(@class, "stars rating")]/text()').extract()[0]
-            style = product_ratings[2].select('.//span[contains(@class, "stars rating")]/text()').extract()[0]
-            
+            ##overall
+            overall_rat = product_ratings[0].select('.//span[contains(@class, "stars rating")]/text()').extract()[0]
+            overall = re.findall(r'\d+', overall_rat)[0]
+            ##comfort
+            comfort_rat = product_ratings[1].select('.//span[contains(@class, "stars rating")]/text()').extract()[0]
+            comfort = re.findall(r'\d+', comfort_rat)[0]
+            ##style
+            style_rat = product_ratings[2].select('.//span[contains(@class, "stars rating")]/text()').extract()[0]
+            style = re.findall(r'\d+', style_rat)[0]
+
             ##slider fit ratings
             fit_ratings = review.select('.//div[@class="productFeel"]')
             ##some reviews do not have fit ratings
